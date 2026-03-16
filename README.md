@@ -1,4 +1,4 @@
-# Pet Sitting Booking Platform (Solo Sitter) - v2
+# Pet Sitting Booking Platform
 
 **Flow**: Client selects a service → creates a request → chat opens immediately → optionally request **Meet & Greet ($15)** inside chat → owner confirms → Stripe payment → request paid.
 
