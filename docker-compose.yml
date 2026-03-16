@@ -1,0 +1,49 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: pet_booking
+    ports:
+      - "5433:5432"
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+
+  server:
+    build: ./server
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://postgres:postgres@db:5432/pet_booking
+      DB_SSL: "false"
+      CORS_ORIGIN: "http://localhost:5173"
+      STRIPE_SECRET_KEY: "${STRIPE_SECRET_KEY}"
+      STRIPE_WEBHOOK_SECRET: "${STRIPE_WEBHOOK_SECRET}"
+      APP_BASE_URL: "http://localhost:5173"
+      OWNER_ADMIN_TOKEN: "${OWNER_ADMIN_TOKEN}"
+      AWS_REGION: "us-east-1"
+      S3_BUCKET: "yvette-pet-sitting"
+      AWS_ACCESS_KEY_ID: "${AWS_ACCESS_KEY_ID}"
+      AWS_SECRET_ACCESS_KEY: "${AWS_SECRET_ACCESS_KEY}"
+      # Optional: CloudFront/custom domain
+      # PUBLIC_S3_BASE_URL: "${PUBLIC_S3_BASE_URL}"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev"
+    environment:
+      VITE_API_BASE: http://localhost:8080
+    volumes:
+      - ./web:/app
+    ports:
+      - "5173:5173"
+    depends_on:
+      - server
+
+volumes:
+  dbdata:
