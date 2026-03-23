@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { api } from "../lib/api.js";
 
 const page = {
@@ -72,12 +72,24 @@ function fmtDateTime(s) {
   return d.toLocaleString();
 }
 
+function ownerHeaders() {
+  return {
+    "content-type": "application/json",
+    "x-owner-token": localStorage.getItem("ownerToken") || "",
+  };
+}
+
 export default function ChatPage() {
   const { conversationId } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+
+  // 更明确：只认显式 role
+  const ownerMode = location.state?.role === "OWNER";
 
   const [messages, setMessages] = useState([]);
   const [requestDetail, setRequestDetail] = useState(null);
+  const [dailyLogs, setDailyLogs] = useState([]);
   const [text, setText] = useState("");
   const [meetAt, setMeetAt] = useState("");
   const [meetLoc, setMeetLoc] = useState("Seattle");
@@ -101,54 +113,111 @@ export default function ChatPage() {
   }, [request, meetGreet]);
 
   const showMeetPayButton = useMemo(() => {
+    if (ownerMode) return false;
     if (!meetGreet) return false;
     return !["PAID", "COMPLETED"].includes(meetGreet.status);
-  }, [meetGreet]);
+  }, [meetGreet, ownerMode]);
 
   const showConfirmPayButton = useMemo(() => {
+    if (ownerMode) return false;
     if (!request) return false;
     return ["REQUESTED", "CONFIRMED", "PAYMENT_PENDING"].includes(request.status);
-  }, [request]);
+  }, [request, ownerMode]);
 
-  async function loadThread() {
+  const ownerFetch = useCallback(async (path, opts = {}) => {
+    const base = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+
+    const res = await fetch(`${base}${path}`, {
+      credentials: "include",
+      ...opts,
+      headers: {
+        ...ownerHeaders(),
+        ...(opts.headers || {}),
+      },
+    });
+
+    const text = await res.text();
+    let data = null;
+
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = { raw: text };
+    }
+
+    if (!res.ok) {
+      throw new Error(data?.error || `HTTP_${res.status}`);
+    }
+
+    return data;
+  }, []);
+
+  const loadThread = useCallback(async () => {
+    if (!conversationId) return;
+
     setErr("");
 
     try {
-      const convRes = await api.getConversation(conversationId);
-      const requestId = convRes?.conversation?.request_id || null;
+      let convRes;
+      let msgRes;
 
-      const msgRes = await api.getMessages(conversationId, 100);
-      const items = (msgRes.items || []).slice().reverse();
+      if (ownerMode) {
+        convRes = await ownerFetch(`/conversations/${conversationId}`);
+        msgRes = await ownerFetch(`/conversations/${conversationId}/messages?limit=100`);
+      } else {
+        convRes = await api.getConversation(conversationId);
+        msgRes = await api.getMessages(conversationId, 100);
+      }
+
+      const requestId = convRes?.conversation?.request_id || null;
+      const items = (msgRes?.items || []).slice().reverse();
       setMessages(items);
 
       if (requestId) {
-        const detail = await api.getRequest(requestId);
-        setRequestDetail(detail);
+        let detail;
+        let logsRes;
+
+        if (ownerMode) {
+          detail = await ownerFetch(`/requests/${requestId}`);
+          logsRes = await ownerFetch(`/logs/request/${requestId}`);
+        } else {
+          detail = await api.getRequest(requestId);
+          logsRes = await api.getRequestLogs(requestId);
+        }
+
+        setRequestDetail(detail || null);
+        setDailyLogs(logsRes?.logs || []);
       } else {
         setRequestDetail(null);
+        setDailyLogs([]);
       }
     } catch (e) {
       setErr(e.message || "Failed to load chat");
     } finally {
       setLoading(false);
     }
-  }
+  }, [conversationId, ownerFetch, ownerMode]);
+
+  useEffect(() => {
+    setLoading(true);
+    setMessages([]);
+    setRequestDetail(null);
+    setDailyLogs([]);
+    loadThread();
+  }, [loadThread]);
 
   useEffect(() => {
     let alive = true;
 
-    async function firstLoad() {
-      if (!conversationId) return;
-      await loadThread();
-    }
-
-    firstLoad();
-
     const t = setInterval(async () => {
       if (!alive || !conversationId) return;
+
       try {
-        const msgRes = await api.getMessages(conversationId, 100);
-        const items = (msgRes.items || []).slice().reverse();
+        const msgRes = ownerMode
+          ? await ownerFetch(`/conversations/${conversationId}/messages?limit=100`)
+          : await api.getMessages(conversationId, 100);
+
+        const items = (msgRes?.items || []).slice().reverse();
         if (alive) setMessages(items);
       } catch {
         // ignore polling errors
@@ -159,7 +228,7 @@ export default function ChatPage() {
       alive = false;
       clearInterval(t);
     };
-  }, [conversationId]);
+  }, [conversationId, ownerFetch, ownerMode]);
 
   useEffect(() => {
     if (!listRef.current) return;
@@ -168,12 +237,24 @@ export default function ChatPage() {
 
   async function sendMessage() {
     if (!text.trim()) return;
+
     setErr("");
     setOk("");
     setSending(true);
 
     try {
-      await api.sendMessage(conversationId, "CLIENT", text.trim());
+      if (ownerMode) {
+        await ownerFetch(`/conversations/${conversationId}/messages`, {
+          method: "POST",
+          body: JSON.stringify({
+            sender: "OWNER",
+            content: text.trim(),
+          }),
+        });
+      } else {
+        await api.sendMessage(conversationId, "CLIENT", text.trim());
+      }
+
       setText("");
       await loadThread();
     } catch (e) {
@@ -185,6 +266,7 @@ export default function ChatPage() {
 
   async function requestMeet() {
     if (!request?.id) return;
+
     if (!meetAt) {
       setErr("Please choose a meet & greet time.");
       return;
@@ -194,7 +276,20 @@ export default function ChatPage() {
     setOk("");
 
     try {
-      await api.requestMeet(request.id, new Date(meetAt).toISOString(), meetLoc || "Seattle");
+      const payload = {
+        scheduled_at: new Date(meetAt).toISOString(),
+        location: meetLoc || "Seattle",
+      };
+
+      if (ownerMode) {
+        await ownerFetch(`/requests/${request.id}/meet-greet`, {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+      } else {
+        await api.requestMeet(request.id, payload.scheduled_at, payload.location);
+      }
+
       setOk("Meet & greet requested ✅");
       await loadThread();
     } catch (e) {
@@ -259,30 +354,18 @@ export default function ChatPage() {
             <div style={{ fontWeight: 950, marginBottom: 10 }}>Request summary</div>
 
             <div style={{ fontSize: 13, lineHeight: 1.8 }}>
-              <div>
-                <b>Status:</b> {request?.status || "—"}
-              </div>
-              <div>
-                <b>Service:</b> {service?.service_type || "—"}
-              </div>
-              <div>
-                <b>Client:</b> {client?.name || "—"}
-              </div>
-              <div>
-                <b>Email:</b> {client?.email || "—"}
-              </div>
-              <div>
-                <b>Phone:</b> {client?.phone || "—"}
-              </div>
-              <div>
-                <b>Start:</b> {fmtDateTime(request?.start_at)}
-              </div>
-              <div>
-                <b>End:</b> {fmtDateTime(request?.end_at)}
-              </div>
+              <div><b>Status:</b> {request?.status || "—"}</div>
+              <div><b>Service:</b> {service?.service_type || "—"}</div>
+              <div><b>Client:</b> {client?.name || "—"}</div>
+              <div><b>Email:</b> {client?.email || "—"}</div>
+              <div><b>Phone:</b> {client?.phone || "—"}</div>
+              <div><b>Start:</b> {fmtDateTime(request?.start_at)}</div>
+              <div><b>End:</b> {fmtDateTime(request?.end_at)}</div>
               <div>
                 <b>Estimated total:</b>{" "}
-                {request?.quoted_total != null ? fmtMoney(request.quoted_total) : "Pending review"}
+                {request?.quoted_total != null
+                  ? fmtMoney(request.quoted_total)
+                  : "Pending review"}
               </div>
             </div>
 
@@ -364,19 +447,14 @@ export default function ChatPage() {
             {meetGreet ? (
               <>
                 <div style={{ fontSize: 13, lineHeight: 1.8 }}>
+                  <div><b>Status:</b> {meetGreet.status}</div>
+                  <div><b>When:</b> {fmtDateTime(meetGreet.scheduled_at)}</div>
+                  <div><b>Location:</b> {meetGreet.location || "—"}</div>
                   <div>
-                    <b>Status:</b> {meetGreet.status}
-                  </div>
-                  <div>
-                    <b>When:</b> {fmtDateTime(meetGreet.scheduled_at)}
-                  </div>
-                  <div>
-                    <b>Location:</b> {meetGreet.location || "—"}
-                  </div>
-                  <div>
-                    <b>Fee:</b> {meetGreet?.price_cents != null
-                    ? `$${(Number(meetGreet.price_cents) / 100).toFixed(2)}`
-                    : "$15.00"}
+                    <b>Fee:</b>{" "}
+                    {meetGreet?.price_cents != null
+                      ? `$${(Number(meetGreet.price_cents) / 100).toFixed(2)}`
+                      : "$15.00"}
                   </div>
                 </div>
 
@@ -435,83 +513,178 @@ export default function ChatPage() {
           </div>
         </div>
 
-        <div style={card}>
-          <div style={{ fontWeight: 950, marginBottom: 10 }}>Chat</div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <div style={card}>
+            <div style={{ fontWeight: 950, marginBottom: 10 }}>Chat</div>
 
-          <div
-            ref={listRef}
-            style={{
-              border: "1px solid #eee",
-              borderRadius: 12,
-              padding: 12,
-              minHeight: 420,
-              maxHeight: 520,
-              overflow: "auto",
-              background: "#fafafa",
-              display: "grid",
-              gap: 10,
-            }}
-          >
-            {messages.length ? (
-              messages.map((m) => {
-                const mine = m.sender === "CLIENT";
-                return (
-                  <div
-                    key={m.id}
-                    style={{
-                      display: "flex",
-                      justifyContent: mine ? "flex-end" : "flex-start",
-                    }}
-                  >
+            <div
+              ref={listRef}
+              style={{
+                border: "1px solid #eee",
+                borderRadius: 12,
+                padding: 12,
+                minHeight: 420,
+                maxHeight: 520,
+                overflow: "auto",
+                background: "#fafafa",
+                display: "grid",
+                gap: 10,
+              }}
+            >
+              {messages.length ? (
+                messages.map((m) => {
+                  const mine = ownerMode ? m.sender === "OWNER" : m.sender === "CLIENT";
+
+                  return (
                     <div
+                      key={m.id}
                       style={{
-                        maxWidth: "72%",
-                        padding: "10px 12px",
-                        borderRadius: 14,
-                        border: mine ? "1px solid #111" : "1px solid #e3e3e3",
-                        background: mine ? "#111" : "#fff",
-                        color: mine ? "#fff" : "#111",
+                        display: "flex",
+                        justifyContent: mine ? "flex-end" : "flex-start",
                       }}
                     >
-                      <div style={{ fontSize: 11, opacity: mine ? 0.8 : 0.6, marginBottom: 4 }}>
-                        {m.sender} · {fmtDateTime(m.created_at)}
-                      </div>
-                      <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-                        {m.content}
+                      <div
+                        style={{
+                          maxWidth: "72%",
+                          padding: "10px 12px",
+                          borderRadius: 14,
+                          border: mine ? "1px solid #111" : "1px solid #e3e3e3",
+                          background: mine ? "#111" : "#fff",
+                          color: mine ? "#fff" : "#111",
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: 11,
+                            opacity: mine ? 0.8 : 0.6,
+                            marginBottom: 4,
+                          }}
+                        >
+                          {m.sender} · {fmtDateTime(m.created_at)}
+                        </div>
+                        <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+                          {m.content}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })
-            ) : (
-              <div style={{ opacity: 0.7 }}>No messages yet. Start the conversation below.</div>
-            )}
-          </div>
+                  );
+                })
+              ) : (
+                <div style={{ opacity: 0.7 }}>
+                  No messages yet. Start the conversation below.
+                </div>
+              )}
+            </div>
 
-          <div style={{ height: 12 }} />
+            <div style={{ height: 12 }} />
 
-          <div style={{ display: "grid", gap: 10 }}>
-            <textarea
-              style={{ ...input, minHeight: 100, resize: "vertical" }}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Ask a question, confirm details, or say hello..."
-            />
+            <div style={{ display: "grid", gap: 10 }}>
+              <textarea
+                style={{ ...input, minHeight: 100, resize: "vertical" }}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Ask a question, confirm details, or say hello..."
+              />
 
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <button
-                style={btn}
-                onClick={sendMessage}
-                disabled={sending || !text.trim()}
-              >
-                {sending ? "Sending..." : "Send message"}
-              </button>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <button
+                  style={btn}
+                  onClick={sendMessage}
+                  disabled={sending || !text.trim()}
+                >
+                  {sending ? "Sending..." : "Send message"}
+                </button>
+              </div>
+            </div>
+
+            <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
+              This is still a request stage. Final booking is only confirmed after review,
+              approval, and payment.
             </div>
           </div>
 
-          <div style={{ marginTop: 12, fontSize: 12, opacity: 0.7 }}>
-            This is still a request stage. Final booking is only confirmed after review,
-            approval, and payment.
+          <div style={card}>
+            <div style={{ fontWeight: 950, marginBottom: 10 }}>Daily updates</div>
+
+            {!dailyLogs.length ? (
+              <div style={{ opacity: 0.7 }}>No daily logs yet.</div>
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  gap: 10,
+                  maxHeight: 320,
+                  overflow: "auto",
+                }}
+              >
+                {dailyLogs.map((log) => (
+                  <div
+                    key={log.id}
+                    style={{
+                      border: "1px solid #eee",
+                      borderRadius: 12,
+                      padding: 12,
+                      background: "#fafafa",
+                    }}
+                  >
+                    <div style={{ fontSize: 11, opacity: 0.65, marginBottom: 6 }}>
+                      {fmtDateTime(log.created_at)}
+                    </div>
+
+                    <div style={{ fontSize: 13, lineHeight: 1.7 }}>
+                      <div><b>Date:</b> {log.log_date || "—"}</div>
+                      <div><b>Mood:</b> {log.mood || "—"}</div>
+                      <div><b>Energy:</b> {log.energy_level || "—"}</div>
+                      <div><b>Appetite:</b> {log.appetite || "—"}</div>
+                      <div><b>Health:</b> {log.health_status || "—"}</div>
+
+                      <div style={{ marginTop: 6, whiteSpace: "pre-wrap" }}>
+                        <b>Notes:</b> {log.notes || "—"}
+                      </div>
+
+                      {log.photos?.length ? (
+                        <div
+                          style={{
+                            marginTop: 10,
+                            display: "flex",
+                            gap: 10,
+                            flexWrap: "wrap",
+                          }}
+                        >
+                          {log.photos.map((photo) => (
+                            <div
+                              key={photo.id || photo.url}
+                              style={{ display: "grid", gap: 6 }}
+                            >
+                              <img
+                                src={photo.url}
+                                alt={photo.caption || "Log photo"}
+                                style={{
+                                  width: 120,
+                                  height: 120,
+                                  objectFit: "cover",
+                                  borderRadius: 12,
+                                  border: "1px solid #eee",
+                                }}
+                              />
+                              {photo.caption ? (
+                                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                                  {photo.caption}
+                                </div>
+                              ) : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ marginTop: 10, fontSize: 12, opacity: 0.7 }}>
+              Daily logs are shared by the sitter during the stay.
+            </div>
           </div>
         </div>
       </div>

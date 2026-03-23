@@ -1,24 +1,76 @@
 import { Router } from "express";
 import { withTx } from "../db/pool.js";
-import { requireOwner } from "../middlewares/requireOwnerCookie.js";
+import { optionalClientAuth } from "../middlewares/optionalClientAuth.js";
 
 const r = Router();
 
+r.use(optionalClientAuth);
+
+function isOwner(req) {
+  const token = req.header("X-Owner-Token");
+  return Boolean(token && token === process.env.OWNER_ADMIN_TOKEN);
+}
+
+async function getConversationWithClient(db, conversationId) {
+  const q = await db.query(
+    `
+    SELECT c.id, c.request_id, c.created_at, r.client_id
+    FROM conversations c
+    JOIN requests r ON r.id = c.request_id
+    WHERE c.id = $1
+    `,
+    [conversationId]
+  );
+
+  return q.rows[0] ?? null;
+}
+
+function assertCanAccessConversation(req, conv) {
+  const owner = isOwner(req);
+  const clientId = req.client_id || null;
+
+  if (owner) return;
+
+  if (!clientId || conv.client_id !== clientId) {
+    const err = new Error("UNAUTHORIZED");
+    err.code = "UNAUTHORIZED";
+    throw err;
+  }
+}
+
 r.get("/:id", async (req, res) => {
   const { id } = req.params;
+  const owner = isOwner(req);
+  const clientId = req.client_id || null;
 
   try {
     const out = await withTx(async (db) => {
       const q = await db.query(
         `
-        SELECT id, request_id, created_at
-        FROM conversations
-        WHERE id = $1
+        SELECT c.id, c.request_id, c.created_at, r.client_id
+        FROM conversations c
+        JOIN requests r ON r.id = c.request_id
+        WHERE c.id = $1
         `,
         [id]
       );
 
-      return q.rows[0] ?? null;
+      const conv = q.rows[0] ?? null;
+      if (!conv) return null;
+
+      if (!owner) {
+        if (!clientId || conv.client_id !== clientId) {
+          const err = new Error("UNAUTHORIZED");
+          err.code = "UNAUTHORIZED";
+          throw err;
+        }
+      }
+
+      return {
+        id: conv.id,
+        request_id: conv.request_id,
+        created_at: conv.created_at,
+      };
     });
 
     if (!out) {
@@ -26,102 +78,98 @@ r.get("/:id", async (req, res) => {
     }
 
     return res.json({ conversation: out });
-
   } catch (e) {
+    if (e?.code === "UNAUTHORIZED") {
+      return res.status(401).json({ error: "UNAUTHORIZED" });
+    }
     console.error("[GET /conversations/:id] error:", e);
     return res.status(500).json({ error: "INTERNAL" });
   }
 });
 
-/**
- * GET /conversations/:id/messages?cursor=&limit=
- * cursor: ISO timestamp or message UUID (simple timestamp cursor here)
- */
 r.get("/:id/messages", async (req, res) => {
   const { id } = req.params;
-  const limit = Math.min(100, Math.max(1, Number(req.query.limit ?? 30)));
-  const cursor = req.query.cursor ? new Date(String(req.query.cursor)) : null;
 
   try {
-    const out = await withTx(async (client) => {
-      const exists = await client.query(`SELECT 1 FROM conversations WHERE id=$1`, [id]);
-      if (!exists.rows.length) return null;
+    const out = await withTx(async (db) => {
+      const conv = await getConversationWithClient(db, id);
+      if (!conv) return null;
 
-      const params = [id];
-      let where = "conversation_id = $1";
-      if (cursor && !isNaN(cursor)) {
-        params.push(cursor);
-        where += ` AND created_at < $2`;
-      }
-      params.push(limit);
+      assertCanAccessConversation(req, conv);
 
-      const q = await client.query(
+      const msgQ = await db.query(
         `
-        SELECT id, sender, content, created_at
+        SELECT id, conversation_id, sender, content, created_at
         FROM messages
-        WHERE ${where}
+        WHERE conversation_id = $1
         ORDER BY created_at DESC
-        LIMIT $${params.length}
+        LIMIT 100
         `,
-        params
+        [id]
       );
 
-      const items = q.rows;
-      const nextCursor = items.length ? items[items.length - 1].created_at : null;
-      return { items, next_cursor: nextCursor };
+      return {
+        items: msgQ.rows,
+        request_id: conv.request_id,
+      };
     });
 
-    if (!out) return res.status(404).json({ error: "NOT_FOUND" });
+    if (!out) {
+      return res.status(404).json({ error: "NOT_FOUND" });
+    }
+
     return res.json(out);
   } catch (e) {
+    if (e?.code === "UNAUTHORIZED") {
+      return res.status(401).json({ error: "UNAUTHORIZED" });
+    }
     console.error("[GET /conversations/:id/messages] error:", e);
     return res.status(500).json({ error: "INTERNAL" });
   }
 });
 
-/**
- * POST /conversations/:id/messages
- * sender: CLIENT or OWNER (owner may require token if configured)
- */
 r.post("/:id/messages", async (req, res) => {
   const { id } = req.params;
-  const { sender, content } = req.body ?? {};
+  const owner = isOwner(req);
+  const { content } = req.body ?? {};
 
-  if (!sender || !["CLIENT", "OWNER"].includes(sender)) {
-    return res.status(400).json({ error: "INVALID_SENDER" });
-  }
-  if (!content || typeof content !== "string" || content.trim().length < 1) {
-    return res.status(400).json({ error: "INVALID_CONTENT" });
+  if (!content || !String(content).trim()) {
+    return res.status(400).json({ error: "MISSING_CONTENT" });
   }
 
-  // If sender is OWNER, require owner token (optional in dev)
-  const guard = (req, res, next) => next();
-  const ownerGuard = sender === "OWNER" ? requireOwner : guard;
+  try {
+    const out = await withTx(async (db) => {
+      const conv = await getConversationWithClient(db, id);
+      if (!conv) return null;
 
-  return ownerGuard(req, res, async () => {
-    try {
-      const out = await withTx(async (client) => {
-        const exists = await client.query(`SELECT 1 FROM conversations WHERE id=$1`, [id]);
-        if (!exists.rows.length) return null;
+      assertCanAccessConversation(req, conv);
 
-        const ins = await client.query(
-          `
-          INSERT INTO messages(conversation_id, sender, content)
-          VALUES ($1,$2,$3)
-          RETURNING id, sender, content, created_at
-          `,
-          [id, sender, content.trim()]
-        );
-        return ins.rows[0];
-      });
+      const sender = owner ? "OWNER" : "CLIENT";
 
-      if (!out) return res.status(404).json({ error: "NOT_FOUND" });
-      return res.status(201).json({ message: out });
-    } catch (e) {
-      console.error("[POST /conversations/:id/messages] error:", e);
-      return res.status(500).json({ error: "INTERNAL" });
+      const ins = await db.query(
+        `
+        INSERT INTO messages (conversation_id, sender, content)
+        VALUES ($1, $2, $3)
+        RETURNING *
+        `,
+        [id, sender, String(content).trim()]
+      );
+
+      return ins.rows[0];
+    });
+
+    if (!out) {
+      return res.status(404).json({ error: "NOT_FOUND" });
     }
-  });
+
+    return res.status(201).json({ message: out });
+  } catch (e) {
+    if (e?.code === "UNAUTHORIZED") {
+      return res.status(401).json({ error: "UNAUTHORIZED" });
+    }
+    console.error("[POST /conversations/:id/messages] error:", e);
+    return res.status(500).json({ error: "INTERNAL" });
+  }
 });
 
 export default r;

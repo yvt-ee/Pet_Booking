@@ -21,7 +21,7 @@ function Nav() {
       }}
     >
       <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-        <div style={{ fontWeight: 900 }}>Pet Sitting</div>
+        <div style={{ fontWeight: 900 }}>Happy Tails House</div>
         <Link to="/" style={linkStyle}>Home</Link>
         <Link to="/book" style={linkStyle}>Pet Booking</Link>
         <Link to="/portal" style={linkStyle}>Client Portal</Link>
