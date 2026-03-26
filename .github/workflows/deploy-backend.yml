@@ -9,12 +9,12 @@ on:
       - "infra/task-definition.json"
 
 env:
-  AWS_REGION: us-east-1
-  ECR_REPOSITORY: pet-booking-server
-  ECS_SERVICE: pet-booking-service
-  ECS_CLUSTER: pet-booking-cluster
-  ECS_TASK_DEFINITION: infra/task-definition.json
-  CONTAINER_NAME: pet-booking-server
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+  ECS_SERVICE: ${{ vars.ECS_SERVICE }}
+  ECS_CLUSTER: ${{ vars.ECS_CLUSTER }}
+  ECS_TASK_DEFINITION: ${{ vars.ECS_TASK_DEFINITION }}
+  CONTAINER_NAME: ${{ vars.CONTAINER_NAME }}
 
 jobs:
   deploy:
