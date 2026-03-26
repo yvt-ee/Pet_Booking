@@ -1,117 +1,81 @@
 {
-    "taskDefinition": {
-        "taskDefinitionArn": "arn:aws:ecs:us-east-1:590183730439:task-definition/pet-booking-server:8",
-        "containerDefinitions": [
-            {
-                "name": "server",
-                "image": "590183730439.dkr.ecr.us-east-1.amazonaws.com/pet-booking-server:latest",
-                "cpu": 0,
-                "portMappings": [
-                    {
-                        "containerPort": 8080,
-                        "hostPort": 8080,
-                        "protocol": "tcp"
-                    }
-                ],
-                "essential": true,
-                "environment": [
-                    {
-                        "name": "S3_BUCKET",
-                        "value": "yvette-pet-sitting"
-                    },
-                    {
-                        "name": "AWS_REGION",
-                        "value": "us-east-1"
-                    },
-                    {
-                        "name": "DATABASE_URL",
-                        "value": "postgresql://PETpostgres:petsitting1990!-@pet-booking-db.cx8kw6uoa92r.us-east-1.rds.amazonaws.com:5432/pet_booking"
-                    },
-                    {
-                        "name": "DB_SSL",
-                        "value": "true"
-                    },
-                    {
-                        "name": "OWNER_ADMIN_TOKEN",
-                        "value": "TATISTHECODE"
-                    },
-                    {
-                        "name": "PORT",
-                        "value": "8080"
-                    },
-                    {
-                        "name": "CLIENT_SESSION_SECRET",
-                        "value": "b269b87dfebab71a90496e6f9d592b8bd69aa10cc3dfa8c8ae89d62d15c925fd"
-                    },
-                    {
-                        "name": "NODE_ENV",
-                        "value": "production"
-                    },
-                    {
-                        "name": "CORS_ORIGIN",
-                        "value": "https://main.dherx8wberuch.amplifyapp.com"
-                    }
-                ],
-                "environmentFiles": [],
-                "mountPoints": [],
-                "volumesFrom": [],
-                "ulimits": [],
-                "logConfiguration": {
-                    "logDriver": "awslogs",
-                    "options": {
-                        "awslogs-group": "/ecs/pet-booking-server",
-                        "awslogs-create-group": "true",
-                        "awslogs-region": "us-east-1",
-                        "awslogs-stream-prefix": "ecs"
-                    },
-                    "secretOptions": []
-                },
-                "systemControls": []
-            }
-        ],
-        "family": "pet-booking-server",
-        "executionRoleArn": "arn:aws:iam::590183730439:role/ecsTaskExecutionRole",
-        "networkMode": "awsvpc",
-        "revision": 8,
-        "volumes": [],
-        "status": "ACTIVE",
-        "requiresAttributes": [
-            {
-                "name": "com.amazonaws.ecs.capability.logging-driver.awslogs"
-            },
-            {
-                "name": "ecs.capability.execution-role-awslogs"
-            },
-            {
-                "name": "com.amazonaws.ecs.capability.ecr-auth"
-            },
-            {
-                "name": "com.amazonaws.ecs.capability.docker-remote-api.1.19"
-            },
-            {
-                "name": "ecs.capability.execution-role-ecr-pull"
-            },
-            {
-                "name": "com.amazonaws.ecs.capability.docker-remote-api.1.18"
-            },
-            {
-                "name": "ecs.capability.task-eni"
-            },
-            {
-                "name": "com.amazonaws.ecs.capability.docker-remote-api.1.29"
-            }
-        ],
-        "placementConstraints": [],
-        "compatibilities": [
-            "EC2",
-            "FARGATE",
-            "MANAGED_INSTANCES"
-        ],
-        "requiresCompatibilities": [
-            "FARGATE"
-        ],
-        "cpu": "512",
-        "memory": "1024"
-    },
-    "tags": []
+  "family": "pet-booking-server",
+  "containerDefinitions": [
+    {
+      "name": "server",
+      "image": "590183730439.dkr.ecr.us-east-1.amazonaws.com/pet-booking-server:latest",
+      "cpu": 0,
+      "portMappings": [
+        {
+          "containerPort": 8080,
+          "hostPort": 8080,
+          "protocol": "tcp"
+        }
+      ],
+      "essential": true,
+      "environment": [
+        {
+          "name": "S3_BUCKET",
+          "value": "yvette-pet-sitting"
+        },
+        {
+          "name": "AWS_REGION",
+          "value": "us-east-1"
+        },
+        {
+          "name": "DATABASE_URL",
+          "value": "postgresql://PETpostgres:petsitting1990!-@pet-booking-db.cx8kw6uoa92r.us-east-1.rds.amazonaws.com:5432/pet_booking"
+        },
+        {
+          "name": "DB_SSL",
+          "value": "true"
+        },
+        {
+          "name": "OWNER_ADMIN_TOKEN",
+          "value": "TATISTHECODE"
+        },
+        {
+          "name": "PORT",
+          "value": "8080"
+        },
+        {
+          "name": "CLIENT_SESSION_SECRET",
+          "value": "b269b87dfebab71a90496e6f9d592b8bd69aa10cc3dfa8c8ae89d62d15c925fd"
+        },
+        {
+          "name": "NODE_ENV",
+          "value": "production"
+        },
+        {
+          "name": "CORS_ORIGIN",
+          "value": "http://localhost:5173,https://main.dherx8wberuch.amplifyapp.com,https://happytailshouse.com,https://www.happytailshouse.com"
+        }
+      ],
+      "environmentFiles": [],
+      "mountPoints": [],
+      "volumesFrom": [],
+      "ulimits": [],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/pet-booking-server",
+          "awslogs-create-group": "true",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        },
+        "secretOptions": []
+      },
+      "systemControls": []
+    }
+  ],
+  "family": "pet-booking-server",
+  "executionRoleArn": "arn:aws:iam::590183730439:role/ecsTaskExecutionRole",
+  "networkMode": "awsvpc",
+  "volumes": [],
+  "placementConstraints": [],
+  "requiresCompatibilities": [
+    "FARGATE"
+  ],
+  "cpu": "512",
+  "memory": "1024"
 }
