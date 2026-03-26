@@ -219,24 +219,22 @@ export default function RequestFlow() {
 
   const [services, setServices] = useState([]);
   const [me, setMe] = useState(null);
+  const [loadingMe, setLoadingMe] = useState(true);
   const [holidayDates, setHolidayDates] = useState(new Set());
 
   const [err, setErr] = useState("");
   const [ok, setOk] = useState("");
 
-  // profile
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
 
-  // request form
   const [serviceId, setServiceId] = useState("");
   const [selectedPetIds, setSelectedPetIds] = useState([]);
   const [startLocal, setStartLocal] = useState("");
   const [endLocal, setEndLocal] = useState("");
   const [notes, setNotes] = useState("");
 
-  // add pet
   const [showAddPet, setShowAddPet] = useState(false);
   const [petForm, setPetForm] = useState({
     name: "",
@@ -255,7 +253,6 @@ export default function RequestFlow() {
   const [petAvatarUrl, setPetAvatarUrl] = useState("");
   const [petUploadMsg, setPetUploadMsg] = useState("");
 
-  // created request
   const [created, setCreated] = useState(null);
 
   useEffect(() => {
@@ -289,11 +286,12 @@ export default function RequestFlow() {
         setPhone(
           out?.client?.phone?.startsWith("tmp_") ? "" : out?.client?.phone || ""
         );
-      } catch {
-        setErr("Please login in Client Portal first.");
+        setLoadingMe(false);
+      } catch (e) {
+        navigate("/portal", { replace: true });
       }
     })();
-  }, []);
+  }, [navigate]);
 
   const pets = me?.pets || [];
 
@@ -334,6 +332,13 @@ export default function RequestFlow() {
   async function refreshMe() {
     const out = await api.clientMe();
     setMe(out);
+    setEmail(out?.client?.email || "");
+    setName(
+      out?.client?.name && out.client.name !== "New Client" ? out.client.name : ""
+    );
+    setPhone(
+      out?.client?.phone?.startsWith("tmp_") ? "" : out?.client?.phone || ""
+    );
     return out;
   }
 
@@ -413,6 +418,10 @@ export default function RequestFlow() {
     setErr("");
     setOk("");
 
+    if (!email) {
+      setErr("Please login in Client Portal first.");
+      return;
+    }
     if (needsProfile) {
       setErr("Please complete your profile (name + phone) first.");
       return;
@@ -458,7 +467,7 @@ export default function RequestFlow() {
     }
   }
 
-  if (!me) {
+  if (loadingMe) {
     return <div style={card}>Loading…</div>;
   }
 
@@ -469,6 +478,12 @@ export default function RequestFlow() {
 
         {err ? <div style={{ color: "#b00020", marginBottom: 10 }}>{err}</div> : null}
         {ok ? <div style={{ color: "#0a7a2f", marginBottom: 10 }}>{ok}</div> : null}
+
+        {!email ? (
+          <div style={{ marginBottom: 12, fontSize: 13, opacity: 0.8 }}>
+            You are not logged in. Please log in from Client Portal first.
+          </div>
+        ) : null}
 
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
           <Field label="Email (from login)">
@@ -493,7 +508,11 @@ export default function RequestFlow() {
         </div>
 
         <div style={{ marginTop: 10, display: "flex", gap: 10, alignItems: "center" }}>
-          <button style={btn2} onClick={saveProfile} disabled={!name.trim() || !phone.trim()}>
+          <button
+            style={btn2}
+            onClick={saveProfile}
+            disabled={!email || !name.trim() || !phone.trim()}
+          >
             Save profile
           </button>
           {needsProfile ? (
@@ -522,7 +541,11 @@ export default function RequestFlow() {
 
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ fontSize: 13, fontWeight: 800 }}>Pets</div>
-          <button style={btn2} onClick={() => setShowAddPet((v) => !v)}>
+          <button
+            style={btn2}
+            onClick={() => setShowAddPet((v) => !v)}
+            disabled={!email}
+          >
             + Add pet
           </button>
         </div>
@@ -551,7 +574,9 @@ export default function RequestFlow() {
               </label>
             ))
           ) : (
-            <div style={{ opacity: 0.7 }}>No pets yet. Add a pet profile first.</div>
+            <div style={{ opacity: 0.7 }}>
+              {email ? "No pets yet. Add a pet profile first." : "Log in first to view or add pets."}
+            </div>
           )}
         </div>
 
@@ -580,7 +605,7 @@ export default function RequestFlow() {
               <div style={{ marginTop: 8, display: "flex", gap: 10, alignItems: "center" }}>
                 <button
                   style={btn2}
-                  disabled={!petPhotoFile}
+                  disabled={!petPhotoFile || !email}
                   onClick={async () => {
                     setErr("");
                     setOk("");
@@ -741,7 +766,7 @@ export default function RequestFlow() {
             </div>
 
             <div style={{ marginTop: 10, display: "flex", gap: 10 }}>
-              <button style={btn2} onClick={savePetProfile}>
+              <button style={btn2} onClick={savePetProfile} disabled={!email}>
                 Save pet
               </button>
 
@@ -836,6 +861,7 @@ export default function RequestFlow() {
             style={btn}
             onClick={createBooking}
             disabled={
+              !email ||
               needsProfile ||
               !serviceId ||
               !selectedPetIds.length ||

@@ -1,7 +1,11 @@
 -- 003_request_multi_pets.sql
 -- Allow a request to include multiple pets
 
--- 2) Join table: request_pets
+-- 0) Drop old trigger/function that still depend on requests.pet_id
+DROP TRIGGER IF EXISTS trg_enforce_pet_belongs_to_client ON requests;
+DROP FUNCTION IF EXISTS enforce_pet_belongs_to_client();
+
+-- 1) Join table: request_pets
 CREATE TABLE IF NOT EXISTS request_pets (
   request_id UUID NOT NULL REFERENCES requests(id) ON DELETE CASCADE,
   pet_id     UUID NOT NULL REFERENCES pets(id) ON DELETE RESTRICT,
@@ -12,15 +16,14 @@ CREATE TABLE IF NOT EXISTS request_pets (
 CREATE INDEX IF NOT EXISTS idx_request_pets_request ON request_pets(request_id);
 CREATE INDEX IF NOT EXISTS idx_request_pets_pet ON request_pets(pet_id);
 
--- 3) Backfill existing single-pet requests into request_pets
+-- 2) Backfill existing single-pet requests into request_pets
 INSERT INTO request_pets(request_id, pet_id)
 SELECT id, pet_id
 FROM requests
 WHERE pet_id IS NOT NULL
 ON CONFLICT DO NOTHING;
 
-
--- 然后删掉旧列
+-- 3) Remove old single-pet column
 ALTER TABLE requests
 DROP COLUMN IF EXISTS pet_id;
 
@@ -31,12 +34,18 @@ DECLARE
   req_client UUID;
   pet_owner UUID;
 BEGIN
-  SELECT client_id INTO req_client FROM requests WHERE id = NEW.request_id;
+  SELECT client_id INTO req_client
+  FROM requests
+  WHERE id = NEW.request_id;
+
   IF req_client IS NULL THEN
     RAISE EXCEPTION 'request_id % does not exist', NEW.request_id;
   END IF;
 
-  SELECT client_id INTO pet_owner FROM pets WHERE id = NEW.pet_id;
+  SELECT client_id INTO pet_owner
+  FROM pets
+  WHERE id = NEW.pet_id;
+
   IF pet_owner IS NULL THEN
     RAISE EXCEPTION 'pet_id % does not exist', NEW.pet_id;
   END IF;
@@ -50,6 +59,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_enforce_request_pet_belongs_to_client ON request_pets;
+
 CREATE TRIGGER trg_enforce_request_pet_belongs_to_client
 BEFORE INSERT OR UPDATE ON request_pets
 FOR EACH ROW

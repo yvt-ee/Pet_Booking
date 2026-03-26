@@ -14,7 +14,7 @@ r.post("/request/:requestId", async (req, res) => {
   const { requestId } = req.params;
   const { client_email, rating, comment } = req.body ?? {};
 
-  if (!client_email || !rating) return res.status(400).json({ error: "MISSING_FIELDS" });
+  if (!client_email || rating == null) return res.status(400).json({ error: "MISSING_FIELDS" });
   const stars = Number(rating);
   if (!Number.isInteger(stars) || stars < 1 || stars > 5) return res.status(400).json({ error: "INVALID_RATING" });
 
@@ -83,14 +83,11 @@ r.get("/public", async (req, res) => {
           rv.rating,
           rv.comment,
           rv.created_at,
-          -- 只给匿名展示：客户名取首字母
           LEFT(c.name, 1) AS client_initial,
-          p.name AS pet_name,
           s.service_type
         FROM reviews rv
         JOIN requests r ON r.id = rv.request_id
         JOIN clients c ON c.id = rv.client_id
-        JOIN pets p ON p.id = r.pet_id
         JOIN services s ON s.id = r.service_id
         WHERE r.status = 'COMPLETED'
         ORDER BY rv.created_at DESC
