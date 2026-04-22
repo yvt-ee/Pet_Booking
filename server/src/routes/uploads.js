@@ -16,8 +16,12 @@ r.post("/presign", async (req, res) => {
 
     return res.status(201).json({ key, upload_url, public_url });
   } catch (e) {
-    if (e?.code === "S3_CONFIG_MISSING") return res.status(500).json({ error: "S3_CONFIG_MISSING" });
     console.error("[POST /uploads/presign] error:", e);
+
+    if (e?.code === "S3_CONFIG_MISSING") {
+      return res.status(500).json({ error: "S3_CONFIG_MISSING" });
+    }
+
     return res.status(500).json({ error: "INTERNAL" });
   }
 });
