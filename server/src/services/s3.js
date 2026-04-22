@@ -12,17 +12,12 @@ function requireEnv(name) {
   return v;
 }
 
+
 export function s3Client() {
   const region = requireEnv("AWS_REGION");
-  const accessKeyId = requireEnv("AWS_ACCESS_KEY_ID");
-  const secretAccessKey = requireEnv("AWS_SECRET_ACCESS_KEY");
 
   return new S3Client({
     region,
-    credentials: {
-      accessKeyId,
-      secretAccessKey,
-    },
   });
 }
 
