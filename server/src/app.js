@@ -23,31 +23,26 @@ import authOwnerRouter from "./routes/authOwner.js";
 dotenv.config();
 
 const app = express();
+app.set("trust proxy", 1);
 
-/**
- * CORS (ONLY ONCE)
- * - credentials requires a specific origin (not "*")
- */
 const allowedOrigins = (process.env.CORS_ORIGIN || "http://localhost:5173")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
 
-app.use(
-  cors({
-    origin: (origin, cb) => {
-      // allow same-origin / curl / server-to-server (no Origin header)
-      if (!origin) return cb(null, true);
-      return cb(null, allowedOrigins.includes(origin));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "X-Owner-Token"],
-  })
-);
 
-// preflight
-app.options("*", cors());
+const corsOptions = {
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true);
+    return cb(null, allowedOrigins.includes(origin));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "X-Owner-Token"],
+};
+
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 // cookie + json
 app.use(cookieParser());

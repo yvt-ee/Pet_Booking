@@ -4,40 +4,61 @@ import { withTx } from "../db/pool.js";
 import { rateLimit } from "../services/ratelimit.js";
 import { randomOtp6, randomToken, sha256, cookieOpts } from "../services/authTokens.js";
 import { requireClient } from "../middlewares/requireClient.js";
-
+import { sendOtpEmail } from "../services/sendOtpEmail.js"
 const r = Router();
 
 const OTP_TTL_MIN = Number(process.env.CLIENT_OTP_TTL_MIN || 10);
 const CLIENT_SESSION_DAYS = Number(process.env.CLIENT_SESSION_DAYS || 14);
+const OTP_PEPPER = process.env.OTP_PEPPER || "dev_pepper";
 
 function normEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 function ip(req) {
-  return (req.headers["x-forwarded-for"]?.toString().split(",")[0] || req.socket.remoteAddress || "ip").trim();
+  return (
+    req.headers["x-forwarded-for"]?.toString().split(",")[0] || 
+    req.socket.remoteAddress || 
+    "ip"
+  ).trim();
+}
+
+function otpHash(email, code) {
+  return sha256(`${normEmail(email)}:${String(code).trim()}:${OTP_PEPPER}`);
 }
 
 // 1) request otp (rate limited)
 r.post(
   "/request-otp",
-  rateLimit({ keyFn: (req) => `otp-ip:${ip(req)}`, limit: 10, windowMs: 10 * 60_000 }),
-  rateLimit({ keyFn: (req) => `otp-email:${normEmail(req.body?.email)}`, limit: 3, windowMs: 10 * 60_000 }),
+  rateLimit({ 
+    keyFn: (req) => `otp-ip:${ip(req)}`, 
+    limit: 10, 
+    windowMs: 10 * 60_000,
+  }),
+  rateLimit({ 
+    keyFn: (req) => `otp-email:${normEmail(req.body?.email)}`, 
+    limit: 3, 
+    windowMs: 10 * 60_000, 
+  }),
   async (req, res) => {
     const email = normEmail(req.body?.email);
-    if (!email || !email.includes("@")) return res.status(400).json({ error: "INVALID_EMAIL" });
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ error: "INVALID_EMAIL" });
+    }
 
     const code = randomOtp6();
-    const codeHash = sha256(`${email}:${code}:${process.env.OTP_PEPPER || "dev_pepper"}`);
+    const codeHash = otpHash(email, code);
     const expiresAt = new Date(Date.now() + OTP_TTL_MIN * 60_000);
 
     try {
       await withTx(async (db) => {
         // prevent spamming: if last otp within 60s, reject
         const last = await db.query(
-          `SELECT created_at FROM client_login_otps
+          `SELECT created_at 
+           FROM client_login_otps
            WHERE lower(email)=lower($1)
            ORDER BY created_at DESC
-           LIMIT 1`,
+           LIMIT 1
+           `,
           [email]
         );
         if (last.rows[0]) {
@@ -50,14 +71,13 @@ r.post(
         }
 
         await db.query(
-          `INSERT INTO client_login_otps(email, code_hash, expires_at)
-           VALUES ($1,$2,$3)`,
+          `INSERT INTO client_login_otps(email, code_hash, expires_at, attempts, max_attempts)
+           VALUES ($1,$2,$3,0,5)`,
           [email, codeHash, expiresAt]
         );
       });
 
-      // TODO: replace with real email provider (SES/SendGrid/Mailgun)
-      console.log(`[OTP] email=${email} code=${code} (expires in ${OTP_TTL_MIN}min)`);
+      await sendOtpEmail({ to: email, code });
 
       return res.status(201).json({ ok: true });
     } catch (e) {
@@ -77,7 +97,7 @@ r.post(
     const code = String(req.body?.code || "").trim();
     if (!email || !email.includes("@") || !/^\d{6}$/.test(code)) return res.status(400).json({ error: "INVALID_INPUT" });
 
-    const codeHash = sha256(`${email}:${code}:${process.env.OTP_PEPPER || "dev_pepper"}`);
+    const codeHash = otpHash(email, code);
 
     try {
       const out = await withTx(async (db) => {
@@ -99,6 +119,19 @@ r.post(
         }
 
         const otpId = q.rows[0].id;
+        const attempts = Number(q.rows[0].attempts || 0);
+        const maxAttempts = Number(q.rows[0].max_attempts || 5);
+
+        if (attempts >= maxAttempts) {
+          await db.query(
+            `UPDATE client_login_otps SET used_at = now() WHERE id = $1`,
+            [otpId]
+          );
+          const e = new Error("OTP_MAX_ATTEMPTS_EXCEEDED");
+          e.code = "OTP_MAX_ATTEMPTS_EXCEEDED";
+          throw e;
+        }
+
 
         // compare hash
         const match = await db.query(
@@ -115,10 +148,16 @@ r.post(
              RETURNING attempts, max_attempts`,
             [otpId]
           );
-          const { attempts, max_attempts } = upd.rows[0];
-          if (attempts >= max_attempts) {
-            await db.query(`UPDATE client_login_otps SET used_at=now() WHERE id=$1`, [otpId]); // burn it
+          const nextAttempts = Number(upd.rows[0].attempts || 0);
+          const nextMax = Number(upd.rows[0].max_attempts || 5);
+
+          if (nextAttempts >= nextMax) {
+            await db.query(
+              `UPDATE client_login_otps SET used_at = now() WHERE id = $1`,
+              [otpId]
+            );
           }
+          
           const e = new Error("OTP_INVALID");
           e.code = "OTP_INVALID";
           throw e;
@@ -176,7 +215,7 @@ r.get("/me", requireClient, async (req, res) => {
     const out = await withTx(async (db) => {
       const clientQ = await db.query(
         `
-        SELECT id, name, email, phone, avatar_url, created_at
+        SELECT id, name, email, phone, notes, avatar_url, created_at
         FROM clients
         WHERE id = $1
         `,
@@ -240,7 +279,10 @@ r.post("/logout", requireClient, async (req, res) => {
       const tokenHash = sha256(token);
       await withTx((db) => db.query(`UPDATE client_sessions SET revoked_at=now() WHERE token_hash=$1`, [tokenHash]));
     }
-  } catch {}
+  } catch (e) {
+    console.error("[POST /auth/client/logout] error:", e);
+  }
+  
   res.clearCookie("client_session", { ...cookieOpts(), path: "/" });
   return res.json({ ok: true });
 });
